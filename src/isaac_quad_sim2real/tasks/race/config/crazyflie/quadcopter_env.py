@@ -676,12 +676,30 @@ class QuadcopterEnv(DirectRLEnv):
         #TODO ----- START ----- [OPTIONAL]
         # Consider adding additional _get_dones() conditions to influence training. Note that the additional conditions
         # will not be used during runtime for the official class race.
+        
+        # 1. The "Flyaway" Condition (Out of Bounds)
+        lower_bound = torch.tensor([-5.5, -7.5, -0.2], device=self.device)
+        upper_bound = torch.tensor([6.0, 7.5, 5.0], device=self.device)
+        drone_pos = self._robot.data.root_link_pos_w
+        out_of_bounds = (drone_pos < lower_bound) | (drone_pos > upper_bound)
+        cond_flyaway = out_of_bounds.any(dim=1)
+
+        # 2. The "Upside Down" Condition
+        # If a racing drone flips completely upside down, it will accelerate into the floor. 
+        # We can detect this by checking if the Z-axis of the projected gravity vector is positive.
+        gravity_w = torch.tensor([0.0, 0.0, -1.0], device=self.device).repeat(self.num_envs, 1)
+        rot_mat = matrix_from_quat(self._robot.data.root_quat_w)
+        projected_gravity = (rot_mat.transpose(1, 2) @ gravity_w.unsqueeze(2)).squeeze(2)
+        cond_upside_down = projected_gravity[:, 2] > 0.0
+
         #TODO ----- END ----- [OPTIONAL]
 
         died = (
             cond_max_h
           | cond_h_min_time
           | cond_crashed
+          | cond_flyaway
+          | cond_upside_down
         )
 
         # timeout conditions
