@@ -81,7 +81,8 @@ class DefaultQuadcopterStrategy:
         # Check gate passing
         current_drone_x_wrt_gate = self.env._pose_drone_wrt_gate[:, 0]
         # 1. Check if the drone crossed the Y-Z plane of the gate
-        plane_crossed = (self._prev_drone_x_wrt_gate < 0.0) & (current_drone_x_wrt_gate >= 0.0)
+        plane_crossed = (self._prev_drone_x_wrt_gate > 0.0) & (current_drone_x_wrt_gate <= 0.0)
+        plane_crossed_wrong = (self._prev_drone_x_wrt_gate <= 0.0) & (current_drone_x_wrt_gate > 0.0)
         # 2. Check if the drone was actually inside the gate's physical bounds when it crossed
         d = self.env._gate_model_cfg_data.gate_side / 2
         local_y = self.env._pose_drone_wrt_gate[:, 1]
@@ -89,6 +90,7 @@ class DefaultQuadcopterStrategy:
         inside_bound = (torch.abs(local_y) < d) & (torch.abs(local_z) < d)
         # 3. Check if both the conditions are satisfied
         gate_passed = (plane_crossed & inside_bound)
+        wrong_way_cross = (plane_crossed_wrong & inside_bound)
         ids_gate_passed = torch.where(gate_passed)[0]
         # 4. Update buffer
         self._prev_drone_x_wrt_gate = current_drone_x_wrt_gate.clone()
@@ -102,6 +104,7 @@ class DefaultQuadcopterStrategy:
         #==================================== Gate Passing Reward (Sparse) ================================#
         #==================================================================================================#
         gate_pass_reward = gate_passed.float()
+        wrong_direction_reward = wrong_way_cross.float()
 
         #==================================================================================================#
         #====================================== Progress Reward ===========================================#
@@ -110,7 +113,11 @@ class DefaultQuadcopterStrategy:
         # Update distance to goal if gate passed
         self._prev_dist_to_goal[ids_gate_passed] = current_dist_to_goal[ids_gate_passed]
         self._initial_dist_to_goal[ids_gate_passed] = current_dist_to_goal[ids_gate_passed]
-        progress_reward = self._prev_dist_to_goal - current_dist_to_goal
+
+        # progress_reward = self._prev_dist_to_goal - current_dist_to_goal
+        
+        delta = self._prev_dist_to_goal - current_dist_to_goal
+        progress_reward = torch.clamp(delta, min=0.0) # clamped progress reward, do not penalize going away
         # Update previous distance to goal
         self._prev_dist_to_goal = current_dist_to_goal.clone()
 
@@ -123,6 +130,16 @@ class DefaultQuadcopterStrategy:
         mask = (self.env.episode_length_buf > 10).int()
         self.env._crashed = self.env._crashed + crashed * mask
         crash_reward = (crashed * mask).float()
+
+        #==================================================================================================#
+        #========================================== Velocity Reward =======================================#
+        #==================================================================================================#
+
+        velocity = self.env._robot.data.root_lin_vel_w
+        direction = self.env._desired_pos_w - self.env._robot.data.root_link_pos_w
+        direction = direction / torch.norm(direction, dim=1, keepdim=True)
+
+        velocity_reward = torch.sum(velocity * direction, dim=1)
         # TODO ----- END -----
 
         if self.cfg.is_train:
@@ -131,6 +148,8 @@ class DefaultQuadcopterStrategy:
                 "gate_pass_reward": gate_pass_reward * self.env.rew['gate_pass_reward_scale'],
                 "progress_reward": progress_reward * self.env.rew['progress_reward_scale'],
                 "crash_reward": crash_reward * self.env.rew['crash_reward_scale'],
+                "velocity_reward": velocity_reward * self.env.rew['velocity_reward_scale'],
+                "wrong_direction_reward": wrong_direction_reward * self.env.rew['wrong_direction_reward_scale'],
             }
             reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
             reward = torch.where(self.env.reset_terminated,
