@@ -111,9 +111,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         'gate_pass_reward_scale': 10.0,
         'progress_reward_scale': 2.0,
         'crash_reward_scale': -20.0,
-        'velocity_reward_scale': 0.05,
+        'blended_velocity_reward_scale': 0.05,
         'death_cost': -20.0,
         'wrong_direction_reward_scale': -20,
+        'fast_turn_reward_scale': -0.05
     }
     # TODO ----- END -----
 

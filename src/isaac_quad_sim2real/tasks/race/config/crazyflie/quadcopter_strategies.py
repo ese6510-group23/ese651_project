@@ -69,6 +69,7 @@ class DefaultQuadcopterStrategy:
         self._initial_dist_to_goal = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         self._prev_dist_to_goal = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         self._prev_drone_x_wrt_gate = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        self._prev_direction = torch.zeros(self.num_envs, 3, device=self.device)
 
     def get_rewards(self) -> torch.Tensor:
         """get_rewards() is called per timestep. This is where you define your reward structure and compute them
@@ -130,28 +131,43 @@ class DefaultQuadcopterStrategy:
         crash_reward = (crashed * mask).float()
 
         #==================================================================================================#
-        #========================================== Velocity Reward =======================================#
+        #====================================== Blended Velocity Reward ===================================#
         #==================================================================================================#
 
         velocity = self.env._robot.data.root_lin_vel_w
-        direction = self.env._desired_pos_w - self.env._robot.data.root_link_pos_w
+        pos = self.env._robot.data.root_link_pos_w
+        direction = self.env._desired_pos_w - pos
         direction = direction / torch.norm(direction, dim=1, keepdim=True)
 
-        velocity_reward = torch.sum(velocity * direction, dim=1)
+        idx = self.env._idx_wp
+        num_wp = self.env._waypoints.shape[1]
+        next_idx = (idx + 1) % num_wp
+        next_target_pos = self.env._waypoints[next_idx, :3]
 
-        # #==================================================================================================#
-        # #========================================== Velocity Reward =======================================#
-        # #==================================================================================================#
-        # next_vec = self.env._next_target_pos - pos
-        # next_dist = torch.norm(next_vec, dim=1, keepdim=True)
-        # next_dir = next_vec / (next_dist + 1e-6)
-        # d_threshold = 3.0
-        # w = torch.clamp(1 - next_dist / d_threshold, min=0.0, max=1.0) # linear blend
+        next_vec = next_target_pos - pos
+        next_dist = torch.norm(next_vec, dim=1, keepdim=True)
+        next_dir = next_vec / (next_dist + 1e-6)
+        d_threshold = 3.0
+        w = torch.clamp(1 - next_dist / d_threshold, min=0.0, max=1.0) # linear blend
 
-        # blended_dir = (1 - w) * direction + w * next_dir
-        # blended_dir = blended_dir / (torch.norm(blended_dir, dim=1, keepdim=True) + 1e-6)
+        blended_dir = (1 - w) * direction + w * next_dir
+        blended_dir = blended_dir / (torch.norm(blended_dir, dim=1, keepdim=True) + 1e-6)
+        blended_velocity_reward = torch.sum(velocity * blended_dir, dim=1)
 
-        # progress_reward = torch.sum(velocity * blended_dir, dim=1)
+        #==================================================================================================#
+        #========================================== Fast Turn Reward =======================================#
+        #==================================================================================================#
+
+        speed = torch.norm(velocity, dim=1)
+
+        prev_dir = self._prev_direction
+        cos_sim = torch.sum(prev_dir * direction, dim=1)
+        turn = 1 - cos_sim
+
+        fast_turn_reward = turn/2 * speed
+
+        self._prev_direction = direction.detach()
+
         # TODO ----- END -----
 
         if self.cfg.is_train:
@@ -160,8 +176,9 @@ class DefaultQuadcopterStrategy:
                 "gate_pass_reward": gate_pass_reward * self.env.rew['gate_pass_reward_scale'],
                 "progress_reward": progress_reward * self.env.rew['progress_reward_scale'],
                 "crash_reward": crash_reward * self.env.rew['crash_reward_scale'],
-                "velocity_reward": velocity_reward * self.env.rew['velocity_reward_scale'],
+                "blended_velocity_reward": blended_velocity_reward * self.env.rew['blended_velocity_reward_scale'],
                 "wrong_direction_reward": wrong_direction_reward * self.env.rew['wrong_direction_reward_scale'],
+                "fast_turn_reward": fast_turn_reward * self.env.rew['fast_turn_reward_scale'],
             }
             reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
             reward = torch.where(self.env.reset_terminated,
@@ -403,4 +420,4 @@ class DefaultQuadcopterStrategy:
         direction = self.env._desired_pos_w[env_ids] - pos
         direction = direction / (torch.norm(direction, dim=1, keepdim=True) + 1e-6)
 
-        self.env._prev_direction[env_ids] = direction.detach()
+        self._prev_direction[env_ids] = direction.detach()
