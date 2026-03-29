@@ -113,8 +113,6 @@ class DefaultQuadcopterStrategy:
         # Update distance to goal if gate passed
         self._prev_dist_to_goal[ids_gate_passed] = current_dist_to_goal[ids_gate_passed]
         self._initial_dist_to_goal[ids_gate_passed] = current_dist_to_goal[ids_gate_passed]
-
-        # progress_reward = self._prev_dist_to_goal - current_dist_to_goal
         
         delta = self._prev_dist_to_goal - current_dist_to_goal
         progress_reward = torch.clamp(delta, min=0.0) # clamped progress reward, do not penalize going away
@@ -140,6 +138,20 @@ class DefaultQuadcopterStrategy:
         direction = direction / torch.norm(direction, dim=1, keepdim=True)
 
         velocity_reward = torch.sum(velocity * direction, dim=1)
+
+        # #==================================================================================================#
+        # #========================================== Velocity Reward =======================================#
+        # #==================================================================================================#
+        # next_vec = self.env._next_target_pos - pos
+        # next_dist = torch.norm(next_vec, dim=1, keepdim=True)
+        # next_dir = next_vec / (next_dist + 1e-6)
+        # d_threshold = 3.0
+        # w = torch.clamp(1 - next_dist / d_threshold, min=0.0, max=1.0) # linear blend
+
+        # blended_dir = (1 - w) * direction + w * next_dir
+        # blended_dir = blended_dir / (torch.norm(blended_dir, dim=1, keepdim=True) + 1e-6)
+
+        # progress_reward = torch.sum(velocity * blended_dir, dim=1)
         # TODO ----- END -----
 
         if self.cfg.is_train:
@@ -387,3 +399,8 @@ class DefaultQuadcopterStrategy:
         self._initial_dist_to_goal[env_ids] = dist_to_goal.clone()
         self._prev_dist_to_goal[env_ids] = dist_to_goal.clone()
         self._prev_drone_x_wrt_gate[env_ids] = self.env._pose_drone_wrt_gate[env_ids, 0].clone()
+        pos = self.env._robot.data.root_link_pos_w[env_ids]
+        direction = self.env._desired_pos_w[env_ids] - pos
+        direction = direction / (torch.norm(direction, dim=1, keepdim=True) + 1e-6)
+
+        self.env._prev_direction[env_ids] = direction.detach()
