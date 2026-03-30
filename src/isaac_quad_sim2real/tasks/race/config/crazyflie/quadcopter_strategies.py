@@ -347,6 +347,76 @@ class DefaultQuadcopterStrategy:
             wrap_to_pi(initial_yaw + torch.empty(n_reset, device=self.device).uniform_(-0.7854, 0.7854)) # [-pi/4, pi/4]
         )
         default_root_state[:, 3:7] = quat
+        # -------------------------
+        # Domain randomization ranges
+        # -------------------------
+        twr_min, twr_max = self.env._twr_value * 0.95, self.env._twr_value * 1.05
+
+        k_aero_xy_min, k_aero_xy_max = self.env._k_aero_xy_value * 0.5, self.env._k_aero_xy_value * 2.0
+        k_aero_z_min,  k_aero_z_max  = self.env._k_aero_z_value  * 0.5, self.env._k_aero_z_value  * 2.0
+
+        kp_rp_min, kp_rp_max = self.env._kp_omega_rp_value * 0.85, self.env._kp_omega_rp_value * 1.15
+        ki_rp_min, ki_rp_max = self.env._ki_omega_rp_value * 0.85, self.env._ki_omega_rp_value * 1.15
+        kd_rp_min, kd_rp_max = self.env._kd_omega_rp_value * 0.7,  self.env._kd_omega_rp_value * 1.3
+
+        kp_y_min, kp_y_max = self.env._kp_omega_y_value * 0.85, self.env._kp_omega_y_value * 1.15
+        ki_y_min, ki_y_max = self.env._ki_omega_y_value * 0.85, self.env._ki_omega_y_value * 1.15
+        kd_y_min, kd_y_max = self.env._kd_omega_y_value * 0.7,  self.env._kd_omega_y_value * 1.3
+
+        if self.cfg.is_train:
+
+            # 20% chance to randomize (important for performance)
+            if torch.rand(1) < 0.5:
+
+                param_names = ["twr", "k_aero_xy", "k_aero_z",
+                            "kp_rp", "ki_rp", "kd_rp",
+                            "kp_y", "ki_y", "kd_y"]
+
+                chosen = np.random.choice(param_names, size=3, replace=False)
+
+                # reset all to nominal first
+                self.env._K_aero[env_ids, :2] = self.env._k_aero_xy_value
+                self.env._K_aero[env_ids, 2] = self.env._k_aero_z_value
+
+                self.env._kp_omega[env_ids, :2] = self.env._kp_omega_rp_value
+                self.env._ki_omega[env_ids, :2] = self.env._ki_omega_rp_value
+                self.env._kd_omega[env_ids, :2] = self.env._kd_omega_rp_value
+
+                self.env._kp_omega[env_ids, 2] = self.env._kp_omega_y_value
+                self.env._ki_omega[env_ids, 2] = self.env._ki_omega_y_value
+                self.env._kd_omega[env_ids, 2] = self.env._kd_omega_y_value
+
+                self.env._thrust_to_weight[env_ids] = self.env._twr_value
+
+                # apply randomization only to selected parameters
+                for p in chosen:
+
+                    if p == "twr":
+                        self.env._thrust_to_weight[env_ids] = torch.empty(len(env_ids), device=self.device).uniform_(twr_min, twr_max)
+
+                    elif p == "k_aero_xy":
+                        self.env._K_aero[env_ids, :2] = torch.empty((len(env_ids), 2), device=self.device).uniform_(k_aero_xy_min, k_aero_xy_max)
+
+                    elif p == "k_aero_z":
+                        self.env._K_aero[env_ids, 2] = torch.empty(len(env_ids), device=self.device).uniform_(k_aero_z_min, k_aero_z_max)
+
+                    elif p == "kp_rp":
+                        self.env._kp_omega[env_ids, :2] = torch.empty((len(env_ids), 2), device=self.device).uniform_(kp_rp_min, kp_rp_max)
+
+                    elif p == "ki_rp":
+                        self.env._ki_omega[env_ids, :2] = torch.empty((len(env_ids), 2), device=self.device).uniform_(ki_rp_min, ki_rp_max)
+
+                    elif p == "kd_rp":
+                        self.env._kd_omega[env_ids, :2] = torch.empty((len(env_ids), 2), device=self.device).uniform_(kd_rp_min, kd_rp_max)
+
+                    elif p == "kp_y":
+                        self.env._kp_omega[env_ids, 2] = torch.empty(len(env_ids), device=self.device).uniform_(kp_y_min, kp_y_max)
+
+                    elif p == "ki_y":
+                        self.env._ki_omega[env_ids, 2] = torch.empty(len(env_ids), device=self.device).uniform_(ki_y_min, ki_y_max)
+
+                    elif p == "kd_y":
+                        self.env._kd_omega[env_ids, 2] = torch.empty(len(env_ids), device=self.device).uniform_(kd_y_min, kd_y_max)
         # TODO ----- END -----
 
         # Handle play mode initial position
